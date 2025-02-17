@@ -426,3 +426,129 @@ describe('WebSocketClient', () => {
         expect(mockConn.send).not.toHaveBeenCalled();
     });
 });
+
+it('should handle multiple reconnection attempts with backoff', async () => {
+    await client.initialize();
+    
+    // Simulate multiple connection failures
+    for (let i = 1; i <= MAX_WEBSOCKET_FAILS + 2; i++) {
+        mockConn.close();
+        
+        if (i <= MAX_WEBSOCKET_FAILS) {
+            // Should use MIN_WEBSOCKET_RETRY_TIME
+            await advanceTimers(MIN_WEBSOCKET_RETRY_TIME);
+        } else {
+            // Should use backed off time
+            const backoffTime = Math.min(MIN_WEBSOCKET_RETRY_TIME * i, MAX_WEBSOCKET_RETRY_TIME);
+            await advanceTimers(backoffTime);
+        }
+        
+        expect(mockedGetOrCreateWebSocketClient).toHaveBeenCalledTimes(i + 1);
+    }
+});
+
+it('should handle overlapping connection attempts', async () => {
+    const connectingCallback = jest.fn();
+    client.setConnectingCallback(connectingCallback);
+    
+    // Start first connection
+    const initPromise1 = client.initialize();
+    
+    // Start second connection before first completes
+    const initPromise2 = client.initialize();
+    
+    await Promise.all([initPromise1, initPromise2]);
+    
+    // Should only create one connection
+    expect(mockedGetOrCreateWebSocketClient).toHaveBeenCalledTimes(1);
+    expect(connectingCallback).toHaveBeenCalledTimes(1);
+});
+
+it('should properly reset state on close and reconnect', async () => {
+    await client.initialize();
+    
+    // Send some messages to increment sequence numbers
+    client.sendUserTypingEvent('channel1');
+    client.sendUserTypingEvent('channel2');
+    
+    const initialSeq = client.getServerSequence();
+    
+    // Close connection
+    client.close(false);
+    
+    // Verify state reset
+    expect(client.isConnected()).toBe(false);
+    
+    // Reconnect
+    await client.initialize();
+    mockConn.open();
+    
+    // Verify sequence numbers reset
+    expect(client.getServerSequence()).toBe(0);
+    
+    // Verify can send new messages
+    client.sendUserTypingEvent('channel3');
+    expect(mockConn.send).toHaveBeenCalled();
+});
+
+it('should handle connection timeout during reconnect', async () => {
+    const errorCallback = jest.fn();
+    client.setErrorCallback(errorCallback);
+    
+    await client.initialize();
+    
+    // Force a reconnection
+    mockConn.close();
+    
+    // Wait for retry
+    await advanceTimers(MIN_WEBSOCKET_RETRY_TIME);
+    
+    // Simulate timeout
+    await advanceTimers(WEBSOCKET_TIMEOUT);
+    
+    expect(errorCallback).toHaveBeenCalled();
+    expect(client.isConnected()).toBe(false);
+});
+
+it('should maintain ping/pong sequence during reconnects', async () => {
+    await client.initialize();
+    
+    // First ping
+    await advanceTimers(PING_INTERVAL);
+    const firstPingSeq = JSON.parse(mockConn.send.mock.calls[1][0]).seq;
+    
+    // Simulate pong response
+    mockConn.onMessage.mock.calls[0][0]({
+        message: {
+            seq_reply: firstPingSeq,
+            event: WebsocketEvents.PONG
+        }
+    });
+    
+    // Force reconnect
+    mockConn.close();
+    await advanceTimers(MIN_WEBSOCKET_RETRY_TIME);
+    mockConn.open();
+    
+    // Next ping after reconnect
+    await advanceTimers(PING_INTERVAL);
+    const secondPingSeq = JSON.parse(mockConn.send.mock.calls[3][0]).seq;
+    
+    // Verify sequence numbers increment properly
+    expect(secondPingSeq).toBeGreaterThan(firstPingSeq);
+});
+
+it('should handle rapid connection/disconnection cycles', async () => {
+    const closeCallback = jest.fn();
+    client.setCloseCallback(closeCallback);
+    
+    for (let i = 0; i < 5; i++) {
+        await client.initialize();
+        mockConn.open();
+        client.close(false);
+        await advanceTimers(MIN_WEBSOCKET_RETRY_TIME);
+    }
+    
+    expect(closeCallback).toHaveBeenCalledTimes(5);
+    expect(client.getServerSequence()).toBe(0);
+});
