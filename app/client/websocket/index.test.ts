@@ -53,11 +53,17 @@ describe('WebSocketClient', () => {
         onClose: jest.fn(),
         onError: jest.fn(),
         onMessage: jest.fn(),
-        open: jest.fn(),
-        close: jest.fn(),
         invalidate: jest.fn(),
         send: jest.fn(),
-        readyState: WebSocketReadyState.OPEN,
+        readyState: WebSocketReadyState.CLOSED,
+        open: () => {
+            mockConn.readyState = WebSocketReadyState.OPEN;
+            mockConn.onOpen.mock.calls[0][0]({});
+        },
+            close: () => {
+            mockConn.readyState = WebSocketReadyState.CLOSED;
+            mockConn.onClose.mock.calls[0][0]({});
+        },
     };
     const mockClient = {client: mockConn};
     mockedGetOrCreateWebSocketClient.mockResolvedValue(mockClient as any);
@@ -65,6 +71,13 @@ describe('WebSocketClient', () => {
 
     beforeEach(() => {
         client = new WebSocketClient(serverUrl, token);
+	    mockConn.readyState = WebSocketReadyState.CLOSED;
+        mockConn.onClose.mockClear();
+        mockConn.send.mockClear();
+    });
+
+    afterEach(() => {
+        client.close();
     });
 
     it('should initialize the WebSocketClient', async () => {
@@ -134,6 +147,33 @@ describe('WebSocketClient', () => {
 
         expect(logInfo).toHaveBeenCalledWith('websocket closed', 'wss://example.com/api/v4/websocket');
         expect(closeCallback).toHaveBeenCalled();
+    });
+
+    it('should handle WebSocket close event - reconnect', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+
+        const closeCallback = jest.fn();
+        client.setCloseCallback(closeCallback);
+
+        const connectingCallback = jest.fn();
+        client.setConnectingCallback(connectingCallback);
+
+        await client.initialize();
+        mockConn.onOpen.mock.calls[0][0](); // Trigger initial connection
+
+        expect(connectingCallback).toHaveBeenCalledTimes(1);
+        expect(closeCallback).toHaveBeenCalledTimes(0);
+
+        mockConn.close();
+
+        jest.advanceTimersByTime(6000); // MIN_WEBSOCKET_RETRY_TIME
+        await new Promise(process.nextTick);
+        
+        expect(connectingCallback).toHaveBeenCalledTimes(2);
+        expect(closeCallback).toHaveBeenCalledTimes(1);
+        expect(mockConn.readyState).toBe(WebSocketReadyState.OPEN);
+
+        jest.useRealTimers();
     });
 
     it('should handle WebSocket close event - tls handshake error', async () => {
@@ -242,9 +282,16 @@ describe('WebSocketClient', () => {
 
         client.sendUserTypingEvent('channel1', 'parent1');
 
-        expect(mockConn.send).toHaveBeenCalledWith(JSON.stringify({
-            action: 'user_typing',
+        expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+            action: 'authentication_challenge',
             seq: 1,
+            data: {
+                token: 'test-token',
+            },
+        }));
+        expect(mockConn.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+            action: 'user_typing',
+            seq: 2,
             data: {
                 channel_id: 'channel1',
                 parent_id: 'parent1',
@@ -263,5 +310,197 @@ describe('WebSocketClient', () => {
         await client.initialize();
 
         expect(client.isConnected()).toBe(true);
+    });
+
+    it('should send ping messages on interval and handle pong responses', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        
+        await client.initialize();
+        
+        // First ping should be sent after PING_INTERVAL
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+            action: 'authentication_challenge',
+            seq: 1,
+            data: {
+                token: 'test-token',
+            },
+        }));
+        expect(mockConn.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+            action: 'ping',
+            seq: 2,
+        }));
+
+        // Second ping should be sent if we got a pong response
+        const pongMessage = {seq_reply: 1, event: WebsocketEvents.PONG};
+        mockConn.onMessage.mock.calls[0][0]({message: pongMessage});
+        
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(3, JSON.stringify({
+            action: 'ping',
+            seq: 3,
+        }));
+
+        // Verify ping sequence increments
+        const pongMessage2 = {seq_reply: 2, event: WebsocketEvents.PONG};
+        mockConn.onMessage.mock.calls[0][0]({message: pongMessage2});
+        
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(4, JSON.stringify({
+            action: 'ping',
+            seq: 4,
+        }));
+
+        jest.useRealTimers();
+    });
+
+    it('should handle ping timeouts and reconnect', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        
+        mockConn.send.mockClear();
+        await client.initialize();
+        
+        // Send first ping
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+            action: 'authentication_challenge',
+            seq: 1,
+            data: {
+                token: 'test-token',
+            },
+        }));
+        expect(mockConn.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+            action: 'ping',
+            seq: 2,
+        }));
+
+        // No pong received, next interval should trigger close
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.onClose).toHaveBeenCalled();
+
+        // Reset mock and verify reconnect behavior
+        mockConn.onClose.mockClear();
+        mockConn.send.mockClear();
+
+        // Should attempt to reconnect after timeout
+        jest.advanceTimersByTime(3000); // MIN_WEBSOCKET_RETRY_TIME
+        await new Promise(process.nextTick);
+        
+        // Should start pinging again after reconnect
+        mockConn.onOpen.mock.calls[0][0]();
+        jest.advanceTimersByTime(30000);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+            action: 'authentication_challenge',
+            seq: 2,
+            data: {
+                token: 'test-token',
+            },
+        }));
+        expect(mockConn.send).toHaveBeenNthCalledWith(3, JSON.stringify({
+            action: 'ping',
+            seq: 3,
+        }));
+
+        jest.useRealTimers();
+    });
+
+    it('should clear ping interval on close', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        
+        await client.initialize();
+
+        // Advance timer - no ping should be sent
+        jest.advanceTimersByTime(20000);
+        await new Promise(process.nextTick);
+        mockConn.send.mockClear();
+        
+        client.close();
+
+        // Advance timer - no ping should be sent
+        jest.advanceTimersByTime(20000);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).not.toHaveBeenCalled();
+
+        jest.useRealTimers();
+    });
+
+    it('should handle connection timeout during reconnect', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        
+        const connectingCallback = jest.fn();
+        client.setConnectingCallback(connectingCallback);
+        
+        await client.initialize();
+        mockConn.onOpen.mock.calls[0][0](); // Initial connection
+        
+        // Simulate disconnect
+        mockConn.readyState = WebSocketReadyState.CLOSED;
+        mockConn.onClose.mock.calls[0][0]({});
+        
+        // Advance past connection timeout
+        jest.advanceTimersByTime(31000);
+        await new Promise(process.nextTick);
+        
+        // Should attempt to reconnect
+        expect(connectingCallback).toHaveBeenCalledTimes(2);
+        
+        // Complete reconnection
+        mockConn.readyState = WebSocketReadyState.OPEN;
+        mockConn.onOpen.mock.calls[0][0]();
+        
+        // Verify ping interval was reestablished
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenNthCalledWith(2, JSON.stringify({
+            action: 'authentication_challenge',
+            seq: 1,
+            data: {
+                token: 'test-token',
+            },
+        }));
+        expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
+            action: 'ping',
+            seq: 2,
+        }));
+
+        jest.useRealTimers();
+    });
+
+    it('should handle overlapping connection attempts', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        
+        await client.initialize();
+        mockConn.onOpen.mock.calls[0][0](); // Initial connection
+        
+        // Start first reconnection attempt
+        mockConn.readyState = WebSocketReadyState.CLOSED;
+        mockConn.onClose.mock.calls[0][0]({});
+        
+        // Trigger second reconnection attempt before first completes
+        jest.advanceTimersByTime(1000);
+        await new Promise(process.nextTick);
+        mockConn.onClose.mock.calls[0][0]({});
+        
+        // Complete reconnection
+        mockConn.readyState = WebSocketReadyState.OPEN;
+        mockConn.onOpen.mock.calls[0][0]();
+        
+        // Verify only one ping interval is active
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenCalledTimes(1); // auth challenge + 1 ping
+        
+        // Verify subsequent pings
+        jest.advanceTimersByTime(30100);
+        await new Promise(process.nextTick);
+        expect(mockConn.send).toHaveBeenCalledTimes(1); // + 1 more ping
+
+        jest.useRealTimers();
     });
 });
