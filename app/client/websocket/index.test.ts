@@ -48,6 +48,10 @@ const advanceTimers = async (ms: number) => {
     await new Promise(process.nextTick);
 };
 
+const enableFakeTimers = () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick'] });
+};
+
 describe('WebSocketClient', () => {
     let client: WebSocketClient;
     const serverUrl = 'https://example.com';
@@ -155,7 +159,7 @@ describe('WebSocketClient', () => {
     });
 
     it('should handle WebSocket close event - reconnect', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        enableFakeTimers();
 
         const closeCallback = jest.fn();
         client.setCloseCallback(closeCallback);
@@ -317,7 +321,7 @@ describe('WebSocketClient', () => {
     });
 
     it('should send ping messages on interval and handle pong responses', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        enableFakeTimers();
         
         await client.initialize();
         
@@ -359,7 +363,7 @@ describe('WebSocketClient', () => {
     });
 
     it('should handle ping timeouts and reconnect', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        enableFakeTimers();
         
         mockConn.send.mockClear();
         await client.initialize();
@@ -410,7 +414,7 @@ describe('WebSocketClient', () => {
     });
 
     it('should clear ping interval on close', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        enableFakeTimers();
         
         await client.initialize();
         mockConn.onOpen.mock.calls[0][0](); // Complete the connection
@@ -431,7 +435,7 @@ describe('WebSocketClient', () => {
     });
 
     it('should handle connection timeout during reconnect', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
+        enableFakeTimers();
         
         const connectingCallback = jest.fn();
         client.setConnectingCallback(connectingCallback);
