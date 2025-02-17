@@ -43,6 +43,11 @@ jest.mock('@utils/config', () => ({
 const mockedHasReliableWebsocket = jest.mocked(hasReliableWebsocket);
 const mockedGetOrCreateWebSocketClient = jest.mocked(getOrCreateWebSocketClient);
 
+const advanceTimers = async (ms: number) => {
+    jest.advanceTimersByTime(ms);
+    await new Promise(process.nextTick);
+};
+
 describe('WebSocketClient', () => {
     let client: WebSocketClient;
     const serverUrl = 'https://example.com';
@@ -166,8 +171,7 @@ describe('WebSocketClient', () => {
 
         mockConn.close();
 
-        jest.advanceTimersByTime(6000); // MIN_WEBSOCKET_RETRY_TIME
-        await new Promise(process.nextTick);
+        await advanceTimers(6000); // MIN_WEBSOCKET_RETRY_TIME
         
         expect(connectingCallback).toHaveBeenCalledTimes(2);
         expect(closeCallback).toHaveBeenCalledTimes(1);
@@ -318,8 +322,7 @@ describe('WebSocketClient', () => {
         await client.initialize();
         
         // First ping should be sent after PING_INTERVAL
-        jest.advanceTimersByTime(30100);
-        await new Promise(process.nextTick);
+        await advanceTimers(30100);
         expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
             action: 'authentication_challenge',
             seq: 1,
@@ -336,8 +339,7 @@ describe('WebSocketClient', () => {
         const pongMessage = {seq_reply: 1, event: WebsocketEvents.PONG};
         mockConn.onMessage.mock.calls[0][0]({message: pongMessage});
         
-        jest.advanceTimersByTime(30100);
-        await new Promise(process.nextTick);
+        await advanceTimers(30100);
         expect(mockConn.send).toHaveBeenNthCalledWith(3, JSON.stringify({
             action: 'ping',
             seq: 3,
@@ -347,8 +349,7 @@ describe('WebSocketClient', () => {
         const pongMessage2 = {seq_reply: 2, event: WebsocketEvents.PONG};
         mockConn.onMessage.mock.calls[0][0]({message: pongMessage2});
         
-        jest.advanceTimersByTime(30100);
-        await new Promise(process.nextTick);
+        await advanceTimers(30100);
         expect(mockConn.send).toHaveBeenNthCalledWith(4, JSON.stringify({
             action: 'ping',
             seq: 4,
@@ -364,8 +365,7 @@ describe('WebSocketClient', () => {
         await client.initialize();
         
         // Send first ping
-        jest.advanceTimersByTime(30100);
-        await new Promise(process.nextTick);
+        await advanceTimers(30100);
         expect(mockConn.send).toHaveBeenNthCalledWith(1, JSON.stringify({
             action: 'authentication_challenge',
             seq: 1,
@@ -379,8 +379,7 @@ describe('WebSocketClient', () => {
         }));
 
         // No pong received, next interval should trigger close
-        jest.advanceTimersByTime(30100);
-        await new Promise(process.nextTick);
+        await advanceTimers(30100);
         expect(mockConn.onClose).toHaveBeenCalled();
 
         // Reset mock and verify reconnect behavior
@@ -445,8 +444,7 @@ describe('WebSocketClient', () => {
         mockConn.onClose.mock.calls[0][0]({});
         
         // Advance past connection timeout
-        jest.advanceTimersByTime(31000);
-        await new Promise(process.nextTick);
+        await advanceTimers(31000);
         
         // Should attempt to reconnect
         expect(connectingCallback).toHaveBeenCalledTimes(2);
@@ -484,8 +482,7 @@ describe('WebSocketClient', () => {
         mockConn.onClose.mock.calls[0][0]({});
         
         // Trigger second reconnection attempt before first completes
-        jest.advanceTimersByTime(1000);
-        await new Promise(process.nextTick);
+        await advanceTimers(1000);
         mockConn.onClose.mock.calls[0][0]({});
         
         // Complete reconnection
