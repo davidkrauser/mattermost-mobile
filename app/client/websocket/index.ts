@@ -278,7 +278,7 @@ export default class WebSocketClient {
                 if (msg.error) {
                     logWarning(msg);
                 }
-                if (msg.event === WebsocketEvents.PONG) {
+                if (msg.data?.text === WebsocketEvents.PONG) {
                     this.waitingForPong = false;
                 }
             } else if (this.eventCallback) {
@@ -380,7 +380,7 @@ export default class WebSocketClient {
 
     ping() {
         const msg = {
-            action: 'ping',
+            action: WebsocketEvents.PING,
             seq: this.responseSequence++,
         };
 
