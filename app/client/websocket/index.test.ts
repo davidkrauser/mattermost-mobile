@@ -65,7 +65,7 @@ describe('WebSocketClient', () => {
     const serverUrl = 'https://example.com';
     const token = 'test-token';
 
-    const mockConn = {
+    const createMockConn = () => ({
         onOpen: jest.fn(),
         onClose: jest.fn(),
         onError: jest.fn(),
@@ -73,24 +73,26 @@ describe('WebSocketClient', () => {
         invalidate: jest.fn(),
         send: jest.fn(),
         readyState: WebSocketReadyState.CLOSED,
-        open: () => {
-            mockConn.readyState = WebSocketReadyState.OPEN;
-            mockConn.onOpen.mock.calls[0][0]({});
+        open: function() {
+            this.readyState = WebSocketReadyState.OPEN;
+            this.onOpen.mock.calls[0][0]({});
         },
-            close: () => {
-            mockConn.readyState = WebSocketReadyState.CLOSED;
-            mockConn.onClose.mock.calls[0][0]({});
+        close: function() {
+            this.readyState = WebSocketReadyState.CLOSED;
+            this.onClose.mock.calls[0][0]({});
         },
-    };
-    const mockClient = {client: mockConn};
-    mockedGetOrCreateWebSocketClient.mockResolvedValue(mockClient as any);
-    mockedHasReliableWebsocket.mockReturnValue(false);
+    });
+
+    let mockConn: ReturnType<typeof createMockConn>;
 
     beforeEach(() => {
+        mockConn = createMockConn();
+        const mockClient = {client: mockConn};
+        mockedGetOrCreateWebSocketClient.mockResolvedValue(mockClient as any);
+        mockedHasReliableWebsocket.mockReturnValue(false);
+
         client = new WebSocketClient(serverUrl, token);
         mockConn.readyState = WebSocketReadyState.CLOSED;
-        mockConn.onClose.mockClear();
-        mockConn.send.mockClear();
         enableFakeTimers();
     });
 
