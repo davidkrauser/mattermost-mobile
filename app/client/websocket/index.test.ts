@@ -414,11 +414,12 @@ describe('WebSocketClient', () => {
         jest.useFakeTimers({ doNotFake: ['nextTick'] });
         
         await client.initialize();
+        mockConn.onOpen.mock.calls[0][0](); // Complete the connection
+        mockConn.send.mockClear(); // Clear the initial authentication call
 
         // Advance timer - no ping should be sent
         jest.advanceTimersByTime(20000);
         await new Promise(process.nextTick);
-        mockConn.send.mockClear();
         
         client.close();
 
