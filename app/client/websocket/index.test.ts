@@ -80,13 +80,15 @@ describe('WebSocketClient', () => {
 
     beforeEach(() => {
         client = new WebSocketClient(serverUrl, token);
-	    mockConn.readyState = WebSocketReadyState.CLOSED;
+        mockConn.readyState = WebSocketReadyState.CLOSED;
         mockConn.onClose.mockClear();
         mockConn.send.mockClear();
+        enableFakeTimers();
     });
 
     afterEach(() => {
         client.close();
+        jest.useRealTimers();
     });
 
     it('should initialize the WebSocketClient', async () => {
@@ -180,8 +182,6 @@ describe('WebSocketClient', () => {
         expect(connectingCallback).toHaveBeenCalledTimes(2);
         expect(closeCallback).toHaveBeenCalledTimes(1);
         expect(mockConn.readyState).toBe(WebSocketReadyState.OPEN);
-
-        jest.useRealTimers();
     });
 
     it('should handle WebSocket close event - tls handshake error', async () => {
@@ -321,8 +321,6 @@ describe('WebSocketClient', () => {
     });
 
     it('should send ping messages on interval and handle pong responses', async () => {
-        enableFakeTimers();
-        
         await client.initialize();
         
         // First ping should be sent after PING_INTERVAL
@@ -358,13 +356,9 @@ describe('WebSocketClient', () => {
             action: 'ping',
             seq: 4,
         }));
-
-        jest.useRealTimers();
     });
 
     it('should handle ping timeouts and reconnect', async () => {
-        enableFakeTimers();
-        
         mockConn.send.mockClear();
         await client.initialize();
         
@@ -409,8 +403,6 @@ describe('WebSocketClient', () => {
             action: 'ping',
             seq: 3,
         }));
-
-        jest.useRealTimers();
     });
 
     it('should clear ping interval on close', async () => {
@@ -430,13 +422,9 @@ describe('WebSocketClient', () => {
         jest.advanceTimersByTime(20000);
         await new Promise(process.nextTick);
         expect(mockConn.send).not.toHaveBeenCalled();
-
-        jest.useRealTimers();
     });
 
     it('should handle connection timeout during reconnect', async () => {
-        enableFakeTimers();
-        
         const connectingCallback = jest.fn();
         client.setConnectingCallback(connectingCallback);
         
@@ -476,8 +464,6 @@ describe('WebSocketClient', () => {
     });
 
     it('should handle overlapping connection attempts', async () => {
-        jest.useFakeTimers({ doNotFake: ['nextTick'] });
-        
         await client.initialize();
         mockConn.onOpen.mock.calls[0][0](); // Initial connection
         
